@@ -193,8 +193,13 @@ footer{color:var(--muted);font-size:12px;text-align:center;margin-top:36px;line-
 </div>
 
 <!-- Visitor counting with GoatCounter (same account as digstraightthrough.github.io): no cookies, no personal data;
-     our own copy of their script. Only the page path is sent, never the part after "?". -->
-<script>window.goatcounter = { path: function () { return location.pathname || "/"; } };</script>
+     our own copy of their script. Only the page path is sent, never the part after "?" or "#".
+     The site moved from digstraightthrough.github.io/flemish-flashcards/ to its own address in November 2026;
+     the page name keeps the old "/flemish-flashcards" start so the statistics continue in one line. -->
+<script>window.goatcounter = { path: function () {
+  if (location.hash.indexOf("#move=") === 0) return null;  // the page reloads right after moving progress: count that load only
+  return "/flemish-flashcards" + (location.pathname || "/");
+} };</script>
 <script data-goatcounter="https://digstraightthrough.goatcounter.com/count" async src="vendor/goatcounter/count.js"></script>
 <script src="data.js"></script>
 <script>
@@ -299,7 +304,9 @@ function levelProgress(lv){
 function renderHome(){
   state = {view:"home"}; setNav("home");
   const flem = LEVELS.find(l => l.feature), fp = levelProgress(flem);
-  app.innerHTML = `<p class="tagline" lang="nl-BE">Ik leer Nederlands</p><h1>Learn Flemish, one card at a time</h1>
+  const notice = movedNotice ? `<div class="info">${esc(movedNotice)}</div>` : "";
+  movedNotice = null;  // shown once
+  app.innerHTML = notice + `<p class="tagline" lang="nl-BE">Ik leer Nederlands</p><h1>Learn Flemish, one card at a time</h1>
     <p class="sub">Pick a level, flip the card, mark what you know. Cards you miss come back again.</p>
     <div class="tiles">` + LEVELS.filter(l => !l.feature).map(lv => {
       const p = levelProgress(lv);
@@ -559,7 +566,50 @@ function installApp(){
   box.hidden = !box.hidden;
 }
 
-renderHome();
+// ---------- moving from the old address ----------
+// Until November 2026 this site lived at digstraightthrough.github.io/flemish-flashcards/. Browsers keep saved
+// progress per web address, so that old page now sends visitors here with their progress packed into the link
+// (after "#move=", a part of the link that browsers never send to any server). We add only this site's cards.
+const MOVE_TAG = "#move=";
+let movedNotice = null;
+try { movedNotice = sessionStorage.getItem("movedNotice"); sessionStorage.removeItem("movedNotice"); } catch(e){}
+async function unpackProgress(code){
+  const kind = code.slice(0, 2), b64 = code.slice(2).replace(/-/g, "+").replace(/_/g, "/");
+  const bytes = Uint8Array.from(atob(b64), ch => ch.charCodeAt(0));
+  if(kind === "z:"){
+    const stream = new Blob([bytes]).stream().pipeThrough(new DecompressionStream("deflate-raw"));
+    return JSON.parse(await new Response(stream).text());
+  }
+  return JSON.parse(new TextDecoder().decode(bytes));
+}
+function mergeMovedProgress(p){
+  const mine = new Set(LEVELS.flatMap(l => cardsOf(l.id).map(c => c.id)));
+  const k = new Set(store.get("known", []));
+  let added = 0;
+  for(const id of p.known || []) if(mine.has(id) && !k.has(id)){ k.add(id); added++; }
+  store.set("known", [...k]);
+  const b = store.get("best", {}), ok = new RegExp("^(" + LEVELS.map(l => l.id).join("|") + ")/(g2e|e2g|listen)$");
+  for(const [key, v] of Object.entries(p.best || {})) if(ok.test(key) && typeof v === "number" && !(b[key] >= v)) b[key] = v;
+  store.set("best", b);
+  for(const key of ["reverse", "quizPick"]) if(p.settings && key in p.settings && localStorage.getItem(PREFIX+key) === null) store.set(key, p.settings[key]);
+  return added;
+}
+async function importMovedProgress(){
+  app.innerHTML = `<div class="panel"><div class="big">📦</div><h2>Moving your progress…</h2></div>`;
+  let msg;
+  try {
+    const added = mergeMovedProgress(await unpackProgress(decodeURIComponent(location.hash.slice(MOVE_TAG.length))));
+    msg = added ? `✓ Welcome to the new address! Your progress came with you (${added} cards you know).` : "✓ Welcome to the new address of Flemish Flashcards.";
+  } catch(e){
+    console.warn("moving progress:", e);
+    msg = "Welcome to the new address of Flemish Flashcards. Sorry, your saved progress could not be moved.";
+  }
+  try { sessionStorage.setItem("movedNotice", msg); } catch(e){}
+  location.replace(location.pathname + location.search);  // reload without the long link
+}
+
+if(location.hash.startsWith(MOVE_TAG)) importMovedProgress();
+else renderHome();
 </script>
 </body>
 </html>
